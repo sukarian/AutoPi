@@ -9,15 +9,15 @@ class DeadReckon:
     def __init__(self, initLat, initLong, initCourse):
         self.position = [initLat,initLong,0]
         self.orientation = [0,0,initCourse]
-        #self.noise = [2.11, 7.789, 513]
+        self.serial_port = "/dev/ttyUSB0"
         self.noise = [-6, 8, 514]
         self.gyro_noise = [-5, 2, -2]
+        self.t1 = time.time()
+        self.gyro_constant = 0.075
 
-    def gyro_reckon(self, gyro, dt):
-        gyro_constant = 0.075
-        gyro_update = gyro_constant * np.array(gyro) * dt
+    def orientUpdate(self, gyro, dt):        
+        gyro_update = self.gyro_constant * np.array(gyro) * dt
         self.orientation -= gyro_update
-        return gyro_update
         
     def body2world(self, orient):
         orient = np.subtract(orient,self.gyro_noise)
@@ -31,50 +31,40 @@ class DeadReckon:
         R = np.cross(np.cross(rotz,roty),rotx)
         return R
         
-    def accel_reckon(self, orient, accel, dt):
+    def accelUpdate(self, orient, accel, dt):
         accel = np.subtract(accel,self.noise)
         pos = 0.5 * accel * dt ** 2 
         R = self.body2world(orient)
         position_update = np.matmul(R, np.transpose(pos))
         self.position -= position_update
-        #self.position *= -1
-        return position_update
+
+    def timestamp(self):
+        t2 = time.time()
+        dt = t2 - self.t1
+        self.t1 = time.time()
+        return dt
+
+    def updatePose(self, gyro, accel):
+        dt = self.timestamp()
+        self.orientUpdate(gyro, dt)
+        self.accelUpdate(self.orientation, accel, dt)
 
     def getPose(self):
         return self.position, self.orientation
 
-    def dead_reckon_loop(self):
-        serial_port = "/dev/ttyUSB0"
-        i = 1
-        allPos = []
-        try:
-           with MSPy(device=serial_port, loglevel='WARNING', baudrate=115200) as self.board:
-                t1 = time.time()
-                while True:
-                    if self.board.send_RAW_msg(MSPy.MSPCodes['MSP_RAW_IMU'], data=[]):
-                        dataHandler = self.board.receive_msg()
-                        self.board.process_recv_data(dataHandler)
-                        gyro = self.board.SENSOR_DATA['gyroscope']
-                        accel = self.board.SENSOR_DATA['accelerometer']
-                        t2 = time.time()
-                        dt = t2 - t1                        
+    def dead_reckon_loop(self):        
+       with MSPy(device=self.serial_port, loglevel='WARNING', baudrate=115200) as self.board:                
+            while True:
+                if self.board.send_RAW_msg(MSPy.MSPCodes['MSP_RAW_IMU'], data=[]):
+                    dataHandler = self.board.receive_msg()
+                    self.board.process_recv_data(dataHandler)
+                    gyro = self.board.SENSOR_DATA['gyroscope']
+                    accel = self.board.SENSOR_DATA['accelerometer']
+                    self.updatePose(gyro, accel)
+                    
+                    print("Position:", self.position)
+                    print("Orientation:", self.orientation)
                         
-                        gyro_update = []
-                        gyro_update = self.gyro_reckon(gyro,dt)
-                        t2 = time.time()
-                        dt = t2 - t1
-                        
-                        pos_update = []
-                        pos_update = self.accel_reckon(self.orientation, accel, dt)
-                        allPos.append(self.position)
-                        t1 = time.time()
-                        print(self.position)
-                        
-        except KeyboardInterrupt:
-            plt.figure()           
-            plt.plot(self.position[:][0], self.position[:][1])
-            plt.show()
-            pass
 if __name__ == "__main__":
     dead_reckoner = DeadReckon(0,0,0)
     dead_reckoner.dead_reckon_loop()
